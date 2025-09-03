@@ -1,0 +1,168 @@
+{
+  "circuits": [
+    {
+      "name": "createTask",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "privateData",
+          "type": {
+            "type-name": "Struct",
+            "name": "PrivateTaskData",
+            "elements": [
+              {
+                "name": "requirementsCommitment",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "creatorSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "editTask",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "taskId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "newPrivateData",
+          "type": {
+            "type-name": "Struct",
+            "name": "PrivateTaskData",
+            "elements": [
+              {
+                "name": "requirementsCommitment",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "creatorSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "removeTask",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "taskId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "creatorSecret",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "getTask",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "taskId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "PublicTaskInfo",
+        "elements": [
+          {
+            "name": "creatorHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "encryptedRequirementsHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "TaskStatus",
+              "elements": [
+                "ACTIVE",
+                "COMPLETED",
+                "REMOVED"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "isTaskActive",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "taskId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ]
+}

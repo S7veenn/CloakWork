@@ -1,0 +1,161 @@
+pragma language_version 0.17;
+import CompactStandardLibrary;
+
+// Enums for proof status
+enum ProofStatus {
+  PENDING,
+  VERIFIED,
+  REJECTED
+}
+
+
+// Enum for proof types
+enum ProofType {
+  SKILL_PROOF,
+  EXPERIENCE_PROOF,
+  TASK_COMPLETION_PROOF,
+  REPUTATION_PROOF
+}
+
+// Structure for public proof information
+struct PublicProofInfo {
+  submitterHash: Bytes<32>,
+  proofHash: Bytes<32>,
+  proofType: ProofType,
+  taskId: Bytes<32>,
+  status: ProofStatus,
+  timestamp: Field
+}
+
+// Structure for private proof data
+struct PrivateProofData {
+  submitterSecret: Bytes<32>,
+  proofCommitment: Bytes<32>,
+  taskSecret: Bytes<32>
+}
+
+// Structure for proof verification data
+struct ProofVerificationData {
+  verifierSecret: Bytes<32>,
+  isValid: Boolean,
+  verificationNotes: Opaque<"string">
+}
+
+// Ledger declarations for public state
+export ledger proofs: Map<Bytes<32>, PublicProofInfo>;
+export ledger proofCounter: Counter;
+export ledger taskProofs: Map<Bytes<32>, List<Bytes<32>>>; // taskId -> proofIds
+export ledger verifiedProofs: Map<Bytes<32>, Boolean>; // proofId -> isVerified
+
+// Circuit to submit a proof for a task
+export circuit submitProof(
+  privateData: PrivateProofData,
+  proofType: ProofType
+): Bytes<32> {
+  const proofId = persistentHash<[Bytes<32>, Field]>([privateData.submitterSecret, proofCounter]);
+  const submitterHash = persistentHash<Bytes<32>>(privateData.submitterSecret);
+  const proofHash = privateData.proofCommitment;
+  const taskId = persistentHash<Bytes<32>>(privateData.taskSecret);
+  
+  // Ensure no duplicate proof ID
+  assert(!proofs.member(disclose(proofId)), "Proof ID already exists");
+  
+  // Create public proof info
+  const publicInfo = PublicProofInfo {
+    submitterHash: submitterHash,
+    proofHash: proofHash,
+    proofType: proofType,
+    taskId: taskId,
+    status: ProofStatus.PENDING,
+    timestamp: proofCounter
+  };
+  
+  // Add to ledger
+  proofs.insert(disclose(proofId), disclose(publicInfo));
+  proofCounter.increment(1);
+  
+  // Link proof to task
+  if (taskProofs.member(disclose(taskId))) {
+    taskProofs.lookup(disclose(taskId)).pushFront(disclose(proofId));
+  } else {
+    taskProofs.insert(disclose(taskId), default<List<Bytes<32>>>);
+    taskProofs.lookup(disclose(taskId)).pushFront(disclose(proofId));
+  }
+  
+  return proofId;
+}
+
+// Circuit to verify a submitted proof
+export circuit verifyProof(
+  proofId: Bytes<32>,
+  verificationData: ProofVerificationData
+): [] {
+  const proof = proofs.lookup(disclose(proofId));
+  assert(proof.status == ProofStatus.PENDING, "Proof not pending verification");
+  
+  // Verify the verifier has authority (could be task owner or designated verifier)
+  const verifierHash = persistentHash<Bytes<32>>(verificationData.verifierSecret);
+  
+  // Explicitly disclose the validation result used in public ledger updates
+  const isValidPublic = disclose(verificationData.isValid);
+  
+  // Update proof status based on verification
+  const newStatus = isValidPublic ? ProofStatus.VERIFIED : ProofStatus.REJECTED;
+  
+  const updatedProof = PublicProofInfo {
+    submitterHash: proof.submitterHash,
+    proofHash: proof.proofHash,
+    proofType: proof.proofType,
+    taskId: proof.taskId,
+    status: newStatus,
+    timestamp: proof.timestamp
+  };
+  
+  proofs.insert(disclose(proofId), disclose(updatedProof));
+  
+  // Update verified proofs mapping
+  verifiedProofs.insert(disclose(proofId), isValidPublic);
+}
+
+// Circuit to get proof information
+export circuit getProof(proofId: Bytes<32>): PublicProofInfo {
+  return proofs.lookup(disclose(proofId));
+}
+
+// Circuit to get the number of proofs for a task
+export circuit getTaskProofs(taskId: Bytes<32>): Uint<64> {
+  if (taskProofs.member(disclose(taskId))) {
+    return taskProofs.lookup(disclose(taskId)).length();
+  } else {
+    return 0;
+  }
+}
+
+// Circuit to check if a proof is verified
+export circuit isProofVerified(proofId: Bytes<32>): Boolean {
+  if (verifiedProofs.member(disclose(proofId))) {
+    return verifiedProofs.lookup(disclose(proofId));
+  } else {
+    return false;
+  }
+}
+
+// Circuit to get verified proofs for a submitter (returns count placeholder)
+export circuit getVerifiedProofsBySubmitter(submitterHash: Bytes<32>): Uint<64> {
+  // This would require iteration through proofs - simplified for now
+  // In practice, you might maintain a separate mapping for efficiency
+  return 0;
+}
+
+// Witness functions for private data
+witness getSubmitterSecret(): Bytes<32>;
+witness getProofCommitment(): Bytes<32>;
+witness getTaskSecret(): Bytes<32>;
+witness getVerifierSecret(): Bytes<32>;
+// Removed: witness getVerificationNotes(): Opaque<"string">;
+
+// Constructor to initialize the contract
+constructor() {
+  // Initialize with empty state
+  // All maps start empty, counter starts at 0
+}

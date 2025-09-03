@@ -1,0 +1,341 @@
+{
+  "circuits": [
+    {
+      "name": "createMatch",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "privateData",
+          "type": {
+            "type-name": "Struct",
+            "name": "PrivateMatchData",
+            "elements": [
+              {
+                "name": "taskSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "ownerSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "contributorSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "proofSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "respondToMatch",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "matchId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "ownerSecret",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "accept",
+          "type": {
+            "type-name": "Boolean"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "completeMatch",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "matchId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "contributorSecret",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "giveOwnerConsent",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "revealData",
+          "type": {
+            "type-name": "Struct",
+            "name": "IdentityRevealData",
+            "elements": [
+              {
+                "name": "matchId",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "participantSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "encryptedIdentity",
+                "type": {
+                  "type-name": "Opaque",
+                  "tsType": "string"
+                }
+              },
+              {
+                "name": "consentGiven",
+                "type": {
+                  "type-name": "Boolean"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "giveContributorConsent",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "revealData",
+          "type": {
+            "type-name": "Struct",
+            "name": "IdentityRevealData",
+            "elements": [
+              {
+                "name": "matchId",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "participantSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "encryptedIdentity",
+                "type": {
+                  "type-name": "Opaque",
+                  "tsType": "string"
+                }
+              },
+              {
+                "name": "consentGiven",
+                "type": {
+                  "type-name": "Boolean"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "getMatch",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "matchId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "MatchInfo",
+        "elements": [
+          {
+            "name": "taskId",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "ownerHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "contributorHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "proofId",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "MatchStatus",
+              "elements": [
+                "PENDING",
+                "ACCEPTED",
+                "REJECTED",
+                "COMPLETED"
+              ]
+            }
+          },
+          {
+            "name": "revealStatus",
+            "type": {
+              "type-name": "Enum",
+              "name": "RevealStatus",
+              "elements": [
+                "HIDDEN",
+                "OWNER_CONSENTED",
+                "CONTRIBUTOR_CONSENTED",
+                "MUTUALLY_REVEALED"
+              ]
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "getTaskMatches",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "taskId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "areIdentitiesRevealed",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "matchId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "getRevealedIdentity",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "matchId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "participantHash",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Opaque",
+        "tsType": "string"
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ]
+}

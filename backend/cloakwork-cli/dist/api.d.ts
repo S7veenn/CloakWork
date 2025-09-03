@@ -1,0 +1,50 @@
+import { type MidnightProvider, type WalletProvider } from '@midnight-ntwrk/midnight-js-types';
+import { type Resource } from '@midnight-ntwrk/wallet';
+import { type Wallet } from '@midnight-ntwrk/wallet-api';
+import { type Logger } from 'pino';
+import { type Config } from './config';
+export type TaskPrivateState = {
+    requirementsCommitment: Uint8Array;
+    creatorSecret: Uint8Array;
+};
+export type ProofPrivateState = {
+    submitterSecret: Uint8Array;
+    proofCommitment: Uint8Array;
+    taskSecret: Uint8Array;
+};
+export type MatchingPrivateState = {
+    taskSecret: Uint8Array;
+    ownerSecret: Uint8Array;
+    contributorSecret: Uint8Array;
+    proofSecret: Uint8Array;
+};
+export type BaseProviders = {
+    privateStateProvider: any;
+    publicDataProvider: any;
+    zkConfigProvider: any;
+    proofProvider: any;
+    walletProvider: WalletProvider & MidnightProvider;
+    midnightProvider: WalletProvider & MidnightProvider;
+};
+export declare const createWalletAndMidnightProvider: (wallet: Wallet) => Promise<WalletProvider & MidnightProvider>;
+export declare const waitForSync: (wallet: Wallet) => Promise<import("@midnight-ntwrk/wallet-api").WalletState>;
+export declare const waitForSyncProgress: (wallet: Wallet) => Promise<import("@midnight-ntwrk/wallet-api").WalletState>;
+export declare const waitForFunds: (wallet: Wallet) => Promise<bigint>;
+export declare const saveState: (wallet: Wallet, filename: string) => Promise<void>;
+export declare const isAnotherChain: (wallet: Wallet, offset: number) => Promise<boolean>;
+export declare const randomBytes: (length: number) => Uint8Array;
+export declare const buildWalletAndWaitForFunds: ({ indexer, indexerWS, node, proofServer }: Config, seed: string, filename: string) => Promise<Wallet & Resource>;
+export declare const buildFreshWallet: (config: Config) => Promise<Wallet & Resource>;
+export declare function setLogger(_logger: Logger): void;
+export declare const configureTaskProviders: (wallet: Wallet & Resource, config: Config) => Promise<BaseProviders>;
+export declare const configureProofProviders: (wallet: Wallet & Resource, config: Config) => Promise<BaseProviders>;
+export declare const configureMatchingProviders: (wallet: Wallet & Resource, config: Config) => Promise<BaseProviders>;
+export declare const taskContractInstance: any;
+export declare const proofContractInstance: any;
+export declare const matchingContractInstance: any;
+export declare const joinTaskContract: (providers: BaseProviders, contractAddress: string) => Promise<import("@midnight-ntwrk/midnight-js-contracts").FoundContract<import("@midnight-ntwrk/midnight-js-types").Contract<undefined, import("@midnight-ntwrk/midnight-js-types").Witnesses<undefined>>>>;
+export declare const joinProofContract: (providers: BaseProviders, contractAddress: string) => Promise<import("@midnight-ntwrk/midnight-js-contracts").FoundContract<import("@midnight-ntwrk/midnight-js-types").Contract<undefined, import("@midnight-ntwrk/midnight-js-types").Witnesses<undefined>>>>;
+export declare const joinMatchingContract: (providers: BaseProviders, contractAddress: string) => Promise<import("@midnight-ntwrk/midnight-js-contracts").FoundContract<import("@midnight-ntwrk/midnight-js-types").Contract<undefined, import("@midnight-ntwrk/midnight-js-types").Witnesses<undefined>>>>;
+export declare const deployTaskContract: (providers: BaseProviders, privateState: TaskPrivateState) => Promise<import("@midnight-ntwrk/midnight-js-contracts").DeployedContract<import("@midnight-ntwrk/midnight-js-types").Contract<undefined, import("@midnight-ntwrk/midnight-js-types").Witnesses<undefined>>>>;
+export declare const deployProofContract: (providers: BaseProviders, privateState: ProofPrivateState) => Promise<import("@midnight-ntwrk/midnight-js-contracts").DeployedContract<import("@midnight-ntwrk/midnight-js-types").Contract<undefined, import("@midnight-ntwrk/midnight-js-types").Witnesses<undefined>>>>;
+export declare const deployMatchingContract: (providers: BaseProviders, privateState: MatchingPrivateState) => Promise<import("@midnight-ntwrk/midnight-js-contracts").DeployedContract<import("@midnight-ntwrk/midnight-js-types").Contract<undefined, import("@midnight-ntwrk/midnight-js-types").Witnesses<undefined>>>>;

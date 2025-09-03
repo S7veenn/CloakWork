@@ -1,0 +1,9 @@
+{
+  "name": "@cloakwork/contracts",
+  "private": true,
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "^0.8.1"
+  }
+}

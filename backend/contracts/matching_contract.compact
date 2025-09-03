@@ -1,0 +1,269 @@
+pragma language_version 0.17;
+import CompactStandardLibrary;
+
+// Enums for matching status
+enum MatchStatus {
+  PENDING,
+  ACCEPTED,
+  REJECTED,
+  COMPLETED
+}
+
+// Enum for identity reveal status
+enum RevealStatus {
+  HIDDEN,
+  OWNER_CONSENTED,
+  CONTRIBUTOR_CONSENTED,
+  MUTUALLY_REVEALED
+}
+
+// Structure for match information
+struct MatchInfo {
+  taskId: Bytes<32>,
+  ownerHash: Bytes<32>,
+  contributorHash: Bytes<32>,
+  proofId: Bytes<32>,
+  status: MatchStatus,
+  revealStatus: RevealStatus,
+  timestamp: Field
+}
+
+// Structure for identity reveal data
+struct IdentityRevealData {
+  matchId: Bytes<32>,
+  participantSecret: Bytes<32>,
+  encryptedIdentity: Opaque<"string">,
+  consentGiven: Boolean
+}
+
+// Structure for private matching data
+struct PrivateMatchData {
+  taskSecret: Bytes<32>,
+  ownerSecret: Bytes<32>,
+  contributorSecret: Bytes<32>,
+  proofSecret: Bytes<32>
+}
+
+// Ledger declarations for public state
+export ledger matches: Map<Bytes<32>, MatchInfo>;
+export ledger matchCounter: Counter;
+export ledger taskMatches: Map<Bytes<32>, List<Bytes<32>>>; // taskId -> matchIds
+export ledger ownerConsents: Map<Bytes<32>, Boolean>; // matchId -> consent
+export ledger contributorConsents: Map<Bytes<32>, Boolean>; // matchId -> consent
+export ledger revealedIdentities: Map<Bytes<32>, Opaque<"string">>; // participantHash -> encryptedIdentity
+
+// Circuit to create a match between task owner and contributor
+export circuit createMatch(
+  privateData: PrivateMatchData
+): Bytes<32> {
+  const matchId = persistentHash<[Bytes<32>, Field]>([privateData.taskSecret, matchCounter]);
+  const taskId = persistentHash<Bytes<32>>(privateData.taskSecret);
+  const ownerHash = persistentHash<Bytes<32>>(privateData.ownerSecret);
+  const contributorHash = persistentHash<Bytes<32>>(privateData.contributorSecret);
+  const proofId = persistentHash<Bytes<32>>(privateData.proofSecret);
+  
+  // Ensure no duplicate match ID
+  assert(!matches.member(disclose(matchId)), "Match ID already exists");
+  
+  // Create match info
+  const matchInfo = MatchInfo {
+    taskId: taskId,
+    ownerHash: ownerHash,
+    contributorHash: contributorHash,
+    proofId: proofId,
+    status: MatchStatus.PENDING,
+    revealStatus: RevealStatus.HIDDEN,
+    timestamp: matchCounter
+  };
+  
+  // Add to ledger
+  matches.insert(disclose(matchId), disclose(matchInfo));
+  matchCounter.increment(1);
+  
+  // Link match to task
+  if (taskMatches.member(disclose(taskId))) {
+    taskMatches.lookup(disclose(taskId)).pushFront(disclose(matchId));
+  } else {
+    taskMatches.insert(disclose(taskId), default<List<Bytes<32>>>);
+    taskMatches.lookup(disclose(taskId)).pushFront(disclose(matchId));
+  }
+  
+  return matchId;
+}
+
+// Circuit for task owner to accept or reject a match
+export circuit respondToMatch(
+  matchId: Bytes<32>,
+  ownerSecret: Bytes<32>,
+  accept: Boolean
+): [] {
+  const match = matches.lookup(disclose(matchId));
+  assert(match.status == MatchStatus.PENDING, "Match not pending");
+  
+  // Verify ownership
+  const expectedOwnerHash = persistentHash<Bytes<32>>(ownerSecret);
+  assert(expectedOwnerHash == match.ownerHash, "Not the task owner");
+  
+  // Update match status
+  const newStatus = accept ? MatchStatus.ACCEPTED : MatchStatus.REJECTED;
+  
+  const updatedMatch = MatchInfo {
+    taskId: match.taskId,
+    ownerHash: match.ownerHash,
+    contributorHash: match.contributorHash,
+    proofId: match.proofId,
+    status: newStatus,
+    revealStatus: match.revealStatus,
+    timestamp: match.timestamp
+  };
+  
+  matches.insert(disclose(matchId), disclose(updatedMatch));
+}
+
+// Circuit for contributor to mark work as completed
+export circuit completeMatch(
+  matchId: Bytes<32>,
+  contributorSecret: Bytes<32>
+): [] {
+  const match = matches.lookup(disclose(matchId));
+  assert(match.status == MatchStatus.ACCEPTED, "Match not accepted");
+  
+  // Verify contributor identity
+  const expectedContributorHash = persistentHash<Bytes<32>>(contributorSecret);
+  assert(expectedContributorHash == match.contributorHash, "Not the contributor");
+  
+  // Update match status to completed
+  const updatedMatch = MatchInfo {
+    taskId: match.taskId,
+    ownerHash: match.ownerHash,
+    contributorHash: match.contributorHash,
+    proofId: match.proofId,
+    status: MatchStatus.COMPLETED,
+    revealStatus: match.revealStatus,
+    timestamp: match.timestamp
+  };
+  
+  matches.insert(disclose(matchId), disclose(updatedMatch));
+}
+
+// Circuit for identity reveal consent (owner)
+export circuit giveOwnerConsent(
+  revealData: IdentityRevealData
+): [] {
+  const match = matches.lookup(disclose(revealData.matchId));
+  assert(match.status == MatchStatus.ACCEPTED || match.status == MatchStatus.COMPLETED, "Invalid match status");
+  
+  // Verify owner identity
+  const expectedOwnerHash = persistentHash<Bytes<32>>(revealData.participantSecret);
+  assert(expectedOwnerHash == match.ownerHash, "Not the task owner");
+  
+  // Record consent (explicitly disclose witness boolean)
+  const consentPublic = disclose(revealData.consentGiven);
+  ownerConsents.insert(disclose(revealData.matchId), consentPublic);
+  
+  // Store encrypted identity if consent given
+  if (consentPublic) {
+    revealedIdentities.insert(match.ownerHash, disclose(revealData.encryptedIdentity));
+  }
+  
+  // Update reveal status
+  updateRevealStatus(revealData.matchId);
+}
+
+// Circuit for identity reveal consent (contributor)
+export circuit giveContributorConsent(
+  revealData: IdentityRevealData
+): [] {
+  const match = matches.lookup(disclose(revealData.matchId));
+  assert(match.status == MatchStatus.ACCEPTED || match.status == MatchStatus.COMPLETED, "Invalid match status");
+  
+  // Verify contributor identity
+  const expectedContributorHash = persistentHash<Bytes<32>>(revealData.participantSecret);
+  assert(expectedContributorHash == match.contributorHash, "Not the contributor");
+  
+  // Record consent (explicitly disclose witness boolean)
+  const consentPublic = disclose(revealData.consentGiven);
+  contributorConsents.insert(disclose(revealData.matchId), consentPublic);
+  
+  if (consentPublic) {
+    revealedIdentities.insert(match.contributorHash, disclose(revealData.encryptedIdentity));
+  }
+  
+  // Update reveal status
+  updateRevealStatus(revealData.matchId);
+}
+
+// Helper circuit to update reveal status based on consents
+circuit updateRevealStatus(matchId: Bytes<32>): [] {
+  const match = matches.lookup(disclose(matchId));
+  const ownerConsent = ownerConsents.member(disclose(matchId)) ? ownerConsents.lookup(disclose(matchId)) : false;
+  const contributorConsent = contributorConsents.member(disclose(matchId)) ? contributorConsents.lookup(disclose(matchId)) : false;
+  
+  const newRevealStatus = ownerConsent && contributorConsent
+    ? RevealStatus.MUTUALLY_REVEALED
+    : ownerConsent
+      ? RevealStatus.OWNER_CONSENTED
+      : contributorConsent
+        ? RevealStatus.CONTRIBUTOR_CONSENTED
+        : RevealStatus.HIDDEN;
+  
+  const updatedMatch = MatchInfo {
+    taskId: match.taskId,
+    ownerHash: match.ownerHash,
+    contributorHash: match.contributorHash,
+    proofId: match.proofId,
+    status: match.status,
+    revealStatus: newRevealStatus,
+    timestamp: match.timestamp
+  };
+  
+  matches.insert(disclose(matchId), disclose(updatedMatch));
+}
+
+// Circuit to get match information
+export circuit getMatch(matchId: Bytes<32>): MatchInfo {
+  return matches.lookup(disclose(matchId));
+}
+
+// Circuit to get matches for a task (returns the count)
+export circuit getTaskMatches(taskId: Bytes<32>): Uint<64> {
+  if (taskMatches.member(disclose(taskId))) {
+    return taskMatches.lookup(disclose(taskId)).length();
+  } else {
+    return 0;
+  }
+}
+
+// Circuit to check if identities are mutually revealed
+export circuit areIdentitiesRevealed(matchId: Bytes<32>): Boolean {
+  const match = matches.lookup(disclose(matchId));
+  return match.revealStatus == RevealStatus.MUTUALLY_REVEALED;
+}
+
+// Circuit to get revealed identity (only if mutually revealed)
+export circuit getRevealedIdentity(
+  matchId: Bytes<32>,
+  participantHash: Bytes<32>
+): Opaque<"string"> {
+  const match = matches.lookup(disclose(matchId));
+  assert(match.revealStatus == RevealStatus.MUTUALLY_REVEALED, "Identities not mutually revealed");
+  
+  // Verify participant is part of this match
+  assert(participantHash == match.ownerHash || participantHash == match.contributorHash, "Not a participant in this match");
+  
+  return revealedIdentities.lookup(disclose(participantHash));
+}
+
+// Witness functions for private data
+witness getTaskSecret(): Bytes<32>;
+witness getOwnerSecret(): Bytes<32>;
+witness getContributorSecret(): Bytes<32>;
+witness getProofSecret(): Bytes<32>;
+witness getParticipantSecret(): Bytes<32>;
+witness getEncryptedIdentity(): Opaque<"string">;
+
+// Constructor to initialize the contract
+constructor() {
+  // Initialize with empty state
+  // All maps start empty, counter starts at 0
+}

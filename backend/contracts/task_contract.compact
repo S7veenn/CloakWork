@@ -1,0 +1,119 @@
+pragma language_version 0.17;
+import CompactStandardLibrary;
+
+// Enums for task status
+enum TaskStatus {
+  ACTIVE,
+  COMPLETED,
+  REMOVED
+}
+
+// Structure for public task information
+struct PublicTaskInfo {
+  creatorHash: Bytes<32>,
+  encryptedRequirementsHash: Bytes<32>,
+  status: TaskStatus
+}
+
+// Structure for private task data
+struct PrivateTaskData {
+  requirementsCommitment: Bytes<32>,
+  creatorSecret: Bytes<32>
+}
+
+// Ledger declarations for public state
+export ledger tasks: Map<Bytes<32>, PublicTaskInfo>;
+export ledger taskCounter: Counter;
+
+// Circuit to create a new task
+export circuit createTask(
+  privateData: PrivateTaskData
+): Bytes<32> {
+  const taskId = persistentHash<[Bytes<32>, Field]>([privateData.creatorSecret, taskCounter]);
+  const creatorHash = persistentHash<Bytes<32>>(privateData.creatorSecret);
+  const encryptedHash = privateData.requirementsCommitment;
+  
+  // Ensure no duplicate task ID
+  assert(!tasks.member(disclose(taskId)), "Task ID already exists");
+  
+  // Create public task info
+  const publicInfo = PublicTaskInfo {
+    creatorHash: creatorHash,
+    encryptedRequirementsHash: encryptedHash,
+    status: TaskStatus.ACTIVE
+  };
+  
+  // Add to ledger
+  tasks.insert(disclose(taskId), disclose(publicInfo));
+  taskCounter.increment(1);
+  
+  return taskId;
+}
+
+// Circuit to edit an existing task
+export circuit editTask(
+  taskId: Bytes<32>,
+  newPrivateData: PrivateTaskData
+): [] {
+  const task = tasks.lookup(disclose(taskId));
+  assert(task.status == TaskStatus.ACTIVE, "Task not active");
+  
+  // Verify ownership by checking creator hash
+  const expectedHash = persistentHash<Bytes<32>>(newPrivateData.creatorSecret);
+  assert(expectedHash == task.creatorHash, "Not the creator");
+  
+  // Update task with new encrypted requirements
+  const newHash = newPrivateData.requirementsCommitment;
+  const updatedTask = PublicTaskInfo {
+    creatorHash: task.creatorHash,
+    encryptedRequirementsHash: newHash,
+    status: task.status
+  };
+  
+  tasks.insert(disclose(taskId), disclose(updatedTask));
+}
+
+// Circuit to remove a task
+export circuit removeTask(
+  taskId: Bytes<32>,
+  creatorSecret: Bytes<32>
+): [] {
+  const task = tasks.lookup(disclose(taskId));
+  assert(task.status == TaskStatus.ACTIVE, "Task not active");
+  
+  // Verify ownership by checking creator hash
+  const expectedHash = persistentHash<Bytes<32>>(creatorSecret);
+  assert(expectedHash == task.creatorHash, "Not the creator");
+  
+  // Mark task as removed
+  const removedTask = PublicTaskInfo {
+    creatorHash: task.creatorHash,
+    encryptedRequirementsHash: task.encryptedRequirementsHash,
+    status: TaskStatus.REMOVED
+  };
+  
+  tasks.insert(disclose(taskId), disclose(removedTask));
+}
+
+// Circuit to get task information
+export circuit getTask(taskId: Bytes<32>): PublicTaskInfo {
+  return tasks.lookup(disclose(taskId));
+}
+
+// Circuit to check if task exists and is active
+export circuit isTaskActive(taskId: Bytes<32>): Boolean {
+  const task = tasks.lookup(disclose(taskId));
+  return task.status == TaskStatus.ACTIVE;
+}
+
+// Witness to get creator secret (implemented in TypeScript)
+witness getCreatorSecret(): Bytes<32>;
+
+// Witness to get encrypted requirements commitment (implemented in TypeScript)
+witness getRequirementsCommitment(): Bytes<32>;
+
+// Constructor to initialize the contract
+constructor() {
+  // Initialize with empty state - tasks map starts empty
+  // taskCounter starts at 0 by default
+}

@@ -1,0 +1,40 @@
+{
+  "contracts": {
+    "taskContract": {
+      "name": "CloakWorkTaskContract",
+      "file": "task_contract.compact",
+      "description": "Handles task creation, editing, and management"
+    },
+    "proofContract": {
+      "name": "CloakWorkProofContract",
+      "file": "proof_contract.compact",
+      "description": "Manages ZK proof submission and verification"
+    },
+    "matchingContract": {
+      "name": "CloakWorkMatchingContract",
+      "file": "matching_contract.compact",
+      "description": "Handles matching and identity revelation between parties"
+    }
+  },
+  "project": {
+    "name": "CloakWork",
+    "version": "1.0.0",
+    "author": "CloakWork Team",
+    "license": "Apache-2.0",
+    "description": "Privacy-first collaboration platform using ZK proofs"
+  },
+  "networks": {
+    "testnet": {
+      "endpoint": "https://testnet-api.midnight.network",
+      "proofServer": "http://localhost:6300"
+    },
+    "local": {
+      "endpoint": "http://localhost:8080",
+      "proofServer": "http://localhost:6300"
+    }
+  },
+  "deployment": {
+    "gasLimit": 1000000,
+    "deploymentOrder": ["taskContract", "proofContract", "matchingContract"]
+  }
+}

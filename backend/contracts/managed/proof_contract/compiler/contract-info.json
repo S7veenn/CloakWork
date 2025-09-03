@@ -1,0 +1,229 @@
+{
+  "circuits": [
+    {
+      "name": "submitProof",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "privateData",
+          "type": {
+            "type-name": "Struct",
+            "name": "PrivateProofData",
+            "elements": [
+              {
+                "name": "submitterSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "proofCommitment",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "taskSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "proofType",
+          "type": {
+            "type-name": "Enum",
+            "name": "ProofType",
+            "elements": [
+              "SKILL_PROOF",
+              "EXPERIENCE_PROOF",
+              "TASK_COMPLETION_PROOF",
+              "REPUTATION_PROOF"
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "verifyProof",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "proofId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "verificationData",
+          "type": {
+            "type-name": "Struct",
+            "name": "ProofVerificationData",
+            "elements": [
+              {
+                "name": "verifierSecret",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "isValid",
+                "type": {
+                  "type-name": "Boolean"
+                }
+              },
+              {
+                "name": "verificationNotes",
+                "type": {
+                  "type-name": "Opaque",
+                  "tsType": "string"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "getProof",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "proofId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "PublicProofInfo",
+        "elements": [
+          {
+            "name": "submitterHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "proofHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "proofType",
+            "type": {
+              "type-name": "Enum",
+              "name": "ProofType",
+              "elements": [
+                "SKILL_PROOF",
+                "EXPERIENCE_PROOF",
+                "TASK_COMPLETION_PROOF",
+                "REPUTATION_PROOF"
+              ]
+            }
+          },
+          {
+            "name": "taskId",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "ProofStatus",
+              "elements": [
+                "PENDING",
+                "VERIFIED",
+                "REJECTED"
+              ]
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "getTaskProofs",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "taskId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "isProofVerified",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "proofId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "getVerifiedProofsBySubmitter",
+      "pure": true,
+      "arguments": [
+        {
+          "name": "submitterHash",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ]
+}
