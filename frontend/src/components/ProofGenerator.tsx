@@ -3,6 +3,7 @@ import { X, Shield, Upload, FileText, Github, Linkedin, Award, Zap, CheckCircle 
 import { Task, Proof } from '@/store/useStore';
 import { useStore } from '@/store/useStore';
 import { apiService } from '@/services/api';
+import { createZkProofData, determineProofType } from '@/utils/zkProofUtils';
 
 interface ProofGeneratorProps {
   task: Task;
@@ -65,16 +66,26 @@ export default function ProofGenerator({ task, onClose, onProofGenerated, testMo
 
     setIsGenerating(true);
     try {
-      // Simulate ZK proof generation
-      const delay = testMode ? 10 : 3000; // Use shorter delay in test mode
-      await new Promise(resolve => setTimeout(resolve, delay));
-      
-      const proof: Proof = {
-        id: `proof_${Date.now()}`,
+      // Determine proof type based on task requirements and provided data
+      const proofType = determineProofType(task, proofData);
+
+      // Create ZK proof data structure
+      const zkProofData = await createZkProofData({
         taskId: task.id,
         contributorId: currentUser.id,
-        zkProofHash: `zk_${Math.random().toString(36).substr(2, 16)}`,
-        skillsProven: task.skills,
+        proofData: proofData,
+        proofType: proofType
+      });
+
+      // Submit ZK proof via API (this will call the real contract)
+      const response = await apiService.submitProof(zkProofData);
+      
+      const proof: Proof = {
+        id: response.proofId || `proof_${Date.now()}`,
+        taskId: task.id,
+        contributorId: currentUser.id,
+        zkProofHash: response.zkProofHash || response.proofId,
+        skillsProven: task.skills || [],
         proofData: {
           experienceLevel: proofData.experienceYears,
           skillVerifications: proofData.skillProofs,
@@ -85,15 +96,14 @@ export default function ProofGenerator({ task, onClose, onProofGenerated, testMo
         createdAt: new Date().toISOString(),
         isAnonymous: true,
       };
-
-      // Submit proof via API
-      await apiService.submitProof(proof);
       
       setGeneratedProof(proof);
       addProof(proof);
       setStep(3);
     } catch (error) {
-      console.error('Failed to generate proof:', error);
+      console.error('Failed to generate ZK proof:', error);
+      // Show user-friendly error message
+      alert(`Failed to generate proof: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsGenerating(false);
     }

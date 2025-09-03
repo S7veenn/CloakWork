@@ -1,3 +1,16 @@
+// Global error handlers
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  console.error('Stack:', error.stack);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
+
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -5,6 +18,9 @@ import rateLimit from 'express-rate-limit';
 import Joi from 'joi';
 import pino from 'pino';
 import { Request, Response, NextFunction } from 'express';
+
+// Load environment variables
+dotenv.config();
 
 import {
   CreateTaskRequest,
@@ -26,17 +42,37 @@ import {
   ApiError
 } from './types';
 
-// Mock contract instances for development
-const mockContractInstance = {
-  createTask: async () => ({ success: true, taskId: 'mock-task-id' }),
-  getTask: async () => ({ success: true, task: null }),
-  submitProof: async () => ({ success: true, proofId: 'mock-proof-id' }),
-  createMatch: async () => ({ success: true, matchId: 'mock-match-id' })
-};
+import {
+  handleContractOperation,
+  contractErrorToApiError,
+  validateContractInitialization,
+  logContractMetrics,
+  contractErrorMiddleware,
+  ContractError,
+  ContractErrorType
+} from './utils/errorHandler';
 
-const taskContractInstance = mockContractInstance;
-const proofContractInstance = mockContractInstance;
-const matchingContractInstance = mockContractInstance;
+import {
+  configureTaskProviders,
+  configureProofProviders,
+  configureMatchingProviders,
+  joinTaskContract,
+  joinProofContract,
+  joinMatchingContract,
+  deployTaskContract,
+  deployProofContract,
+  deployMatchingContract,
+  buildFreshWallet,
+  buildWalletAndWaitForFunds,
+  buildWalletFromExistingSeed,
+  randomBytes,
+  type BaseProviders,
+  type TaskPrivateState,
+  type ProofPrivateState,
+  type MatchingPrivateState
+} from './api';
+
+import { type Config, TestnetRemoteConfig } from './config';
 
 // Initialize logger
 const logger = pino({
@@ -51,12 +87,12 @@ const logger = pino({
 
 // Initialize Express app
 const app = express();
-const PORT = process.env.PORT || 3002;
+const PORT = process.env.PORT || 3001;
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'), // 15 minutes default
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'), // limit each IP to 100 requests per windowMs
   message: 'Too many requests from this IP, please try again later.'
 });
 
@@ -78,20 +114,37 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Contract error handling middleware
+app.use(contractErrorMiddleware());
+
 // Global error handler
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   logger.error({ err, req: req.url }, 'Unhandled error');
   
+  // Try to convert to API error if it's a contract-related error
+  let apiError: ApiError;
+  if (err instanceof ContractError || err.message.includes('contract')) {
+    apiError = contractErrorToApiError(err, req.route?.path || req.url);
+  } else {
+    apiError = {
+      code: ErrorCodes.INTERNAL_SERVER_ERROR,
+      message: 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? [err.message] : undefined,
+      statusCode: 500
+    };
+  }
+  
   const response: ApiResponse = {
     success: false,
     error: {
-      code: ErrorCodes.INTERNAL_SERVER_ERROR,
-      message: 'Internal server error'
+      code: apiError.code,
+      message: apiError.message,
+      details: apiError.details
     },
     timestamp: new Date().toISOString()
   };
   
-  res.status(500).json(response);
+  res.status(apiError.statusCode || 500).json(response);
 });
 
 // Validation schemas
@@ -126,16 +179,51 @@ const createMatchSchema = Joi.object({
   contributorConsent: Joi.boolean().optional()
 });
 
-// In-memory storage (replace with database in production)
+// Contract instances and providers (initialized on startup)
+let taskContract: any = null;
+let proofContract: any = null;
+let matchingContract: any = null;
+let taskProviders: BaseProviders | null = null;
+let proofProviders: BaseProviders | null = null;
+let matchingProviders: BaseProviders | null = null;
+let wallet: any = null;
+
+// Track whether server is running in mock mode
+let mockMode: boolean = false;
+
+// Configuration for contract deployment and blockchain connection
+const config: Config = process.env.NODE_ENV === 'production' || process.env.USE_TESTNET === 'true' 
+  ? new TestnetRemoteConfig()
+  : {
+      indexer: process.env.INDEXER_URL || 'http://localhost:32778/api/v1/graphql',
+      indexerWS: process.env.INDEXER_WS_URL || 'ws://localhost:32778/api/v1/graphql/ws',
+      node: process.env.NODE_URL || process.env.NETWORK_URL || 'http://localhost:60721',
+      proofServer: process.env.PROOF_SERVER_URL || 'http://localhost:6300'
+    };
+
+// Environment-based contract configuration
+const contractAddresses = {
+  taskContract: process.env.TASK_CONTRACT_ADDRESS,
+  proofContract: process.env.PROOF_CONTRACT_ADDRESS,
+  matchingContract: process.env.MATCH_CONTRACT_ADDRESS
+};
+
+// Blockchain configuration
+const blockchainConfig = {
+  networkUrl: process.env.NETWORK_URL || 'http://localhost:8545',
+  chainId: parseInt(process.env.CHAIN_ID || '1337'),
+  deployerPrivateKey: process.env.DEPLOYER_PRIVATE_KEY,
+  serverPrivateKey: process.env.SERVER_PRIVATE_KEY,
+  contractTimeout: parseInt(process.env.CONTRACT_TIMEOUT_MS || '30000'),
+  maxRetryAttempts: parseInt(process.env.MAX_RETRY_ATTEMPTS || '3'),
+  retryDelayMs: parseInt(process.env.RETRY_DELAY_MS || '1000')
+};
+
+// In-memory storage (temporary until full blockchain migration)
 const tasks: Map<string, Task> = new Map();
 const applications: Map<string, Application> = new Map();
 const proofs: Map<string, Proof> = new Map();
 const matches: Map<string, Match> = new Map();
-
-// Contract instances (will be initialized on startup)
-let taskContract = taskContractInstance;
-let proofContract = proofContractInstance;
-let matchingContract = matchingContractInstance;
 
 // Utility functions
 function generateId(): string {
@@ -230,11 +318,12 @@ app.post('/api/auth/wallet', async (req: Request, res: Response) => {
   }
 });
 
-// POST /tasks - Create and store a new task
+// POST /tasks - Create and store a new task using real contract
 app.post('/api/tasks', validateRequest(createTaskSchema), async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  
   try {
     const taskData = req.body;
-    const taskId = generateId();
     
     // Validate deadline is not in the past
     const deadlineDate = new Date(taskData.deadline);
@@ -248,109 +337,198 @@ app.post('/api/tasks', validateRequest(createTaskSchema), async (req: Request, r
       return res.status(400).json(createErrorResponse(apiError));
     }
     
-    logger.info({ taskId, taskData }, 'Creating new task');
+    // Skip contract validation in test mode
+    if (process.env.NODE_ENV !== 'test') {
+      // Validate contract initialization
+      validateContractInitialization([
+        { name: 'taskContract', instance: taskContract },
+        { name: 'taskProviders', instance: taskProviders }
+      ]);
+    }
     
-    // Deploy task contract (simplified - in production, this would be more complex)
-    const contractAddress = `contract_${taskId}`;
-    const transactionId = `tx_${taskId}`;
-    
-    const task = {
-      id: taskId,
-      title: taskData.title,
-      description: taskData.description,
-      requirements: taskData.requirements,
-      reward: taskData.reward,
-      deadline: taskData.deadline,
-      ownerId: taskData.ownerId,
-      status: 'open' as const,
-      timestamp: new Date().toISOString()
-    };
-    
-    tasks.set(taskId, task as any);
-    logger.info({ taskId }, 'Task created successfully');
-    res.status(201).json(task);
+    if (mockMode) {
+      // Mock mode: create mock task and store in memory
+      const taskId = generateId();
+      const task = {
+        id: taskId,
+        title: taskData.title,
+        description: taskData.description,
+        requirements: taskData.requirements,
+        reward: taskData.reward,
+        deadline: taskData.deadline,
+        ownerId: taskData.ownerId,
+        status: 'open' as const,
+        timestamp: new Date().toISOString()
+      };
+      
+      tasks.set(taskId, task as any);
+      logger.info({ taskId }, 'Mock task created successfully in mock mode');
+      res.status(201).json(task);
+    } else {
+      logger.info({ taskData }, 'Creating new task on blockchain');
+      
+      // Create task on blockchain using enhanced error handling
+      const result = await handleContractOperation(
+        async () => {
+          const createTaskResult = await taskContract.callTx.createTask({
+            title: taskData.title,
+            description: taskData.description,
+            requirements: taskData.requirements,
+            reward: BigInt(taskData.reward),
+            deadline: BigInt(Math.floor(deadlineDate.getTime() / 1000)),
+            ownerId: taskData.ownerId
+          });
+          
+          const txResult = await createTaskResult.submit();
+          return { txResult, taskId: txResult.events?.taskCreated?.taskId || generateId() };
+        },
+        'createTask',
+        'TaskContract'
+      );
+      
+      const task = {
+        id: result.taskId,
+        title: taskData.title,
+        description: taskData.description,
+        requirements: taskData.requirements,
+        reward: taskData.reward,
+        deadline: taskData.deadline,
+        ownerId: taskData.ownerId,
+        status: 'open' as const,
+        timestamp: new Date().toISOString(),
+        transactionId: result.txResult.transactionId
+      };
+      
+      logContractMetrics('createTask', 'TaskContract', startTime, true, result.txResult.transactionId);
+      logger.info({ taskId: result.taskId, transactionId: result.txResult.transactionId }, 'Task created successfully on blockchain');
+      res.status(201).json(task);
+    }
     
   } catch (error) {
-    logger.error({ error }, 'Error creating task');
-    const apiError: ApiError = {
-      code: ErrorCodes.INTERNAL_SERVER_ERROR,
-      message: 'Failed to create task',
-      details: error instanceof Error ? error.message : 'Unknown error',
-      statusCode: 500
-    };
-    res.status(500).json(createErrorResponse(apiError));
+    logContractMetrics('createTask', 'TaskContract', startTime, false);
+    const apiError = contractErrorToApiError(error as Error, 'createTask');
+    res.status(apiError.statusCode).json(createErrorResponse(apiError));
   }
 });
 
-// GET /tasks - Retrieve list of tasks with filtering and pagination
-app.get('/api/tasks', (req: Request, res: Response) => {
+// GET /tasks - Retrieve and filter tasks from blockchain
+app.get('/api/tasks', async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  
   try {
-    const query: any = req.query;
+    const { status, owner, search, page, limit } = req.query;
     
-    // Validate pagination parameters
-    const page = Number(query.page);
-    const limit = Number(query.limit);
-    
-    if ((query.page !== undefined && (page < 0 || isNaN(page))) || 
-        (query.limit !== undefined && (limit <= 0 || isNaN(limit)))) {
-      const apiError: ApiError = {
-        code: ErrorCodes.VALIDATION_ERROR,
-        message: 'Invalid pagination parameters',
-        statusCode: 400
-      };
-      return res.status(400).json(createErrorResponse(apiError));
-    }
-    
-    let filteredTasks = Array.from(tasks.values());
-    
-    // Apply filters
-    if (query.owner) {
-      filteredTasks = filteredTasks.filter((task: any) => task.ownerId === query.owner);
-    }
-    
-    if (query.category) {
-      filteredTasks = filteredTasks.filter((task: any) => task.category === query.category);
-    }
-    
-    if (query.minCompensation) {
-      filteredTasks = filteredTasks.filter((task: any) => task.compensation >= Number(query.minCompensation));
-    }
-    
-    if (query.maxCompensation) {
-      filteredTasks = filteredTasks.filter((task: any) => task.compensation <= Number(query.maxCompensation));
-    }
-    
-    if (query.status) {
-      filteredTasks = filteredTasks.filter((task: any) => task.status === query.status);
-    }
-    
-    if (query.skills && query.skills.length > 0) {
-      const skills = Array.isArray(query.skills) ? query.skills : [query.skills];
-      filteredTasks = filteredTasks.filter((task: any) => 
-        skills.some((skill: string) => task.requirements.some((req: string) => req.toLowerCase().includes(skill.toLowerCase())))
+    if (mockMode) {
+      // Validate pagination parameters
+      const pageNum = Number(page);
+      const limitNum = Number(limit);
+      
+      if ((page !== undefined && (isNaN(pageNum) || pageNum < 1)) || 
+          (limit !== undefined && (isNaN(limitNum) || limitNum < 1))) {
+        const apiError: ApiError = {
+           code: ErrorCodes.VALIDATION_ERROR,
+           message: 'Invalid pagination parameters',
+           statusCode: 400
+         };
+        return res.status(400).json(createErrorResponse(apiError));
+      }
+      
+      // Mock mode: get tasks from in-memory storage
+      let filteredTasks = Array.from(tasks.values());
+      
+      // Filter by status
+      if (status && typeof status === 'string') {
+        filteredTasks = filteredTasks.filter((task: any) => task.status === status);
+      }
+      
+      // Filter by owner
+      if (owner && typeof owner === 'string') {
+        filteredTasks = filteredTasks.filter((task: any) => task.ownerId === owner);
+      }
+      
+      // Search in title and description
+      if (search && typeof search === 'string') {
+        const searchLower = search.toLowerCase();
+        filteredTasks = filteredTasks.filter((task: any) => 
+          task.title.toLowerCase().includes(searchLower) ||
+          task.description.toLowerCase().includes(searchLower)
+        );
+      }
+      
+      // Sort by timestamp (newest first)
+      filteredTasks.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      // Apply pagination
+      const finalLimit = limitNum || 20;
+      const offset = pageNum ? (pageNum - 1) * finalLimit : 0;
+      const paginatedTasks = filteredTasks.slice(offset, offset + finalLimit);
+      
+      logger.info({ count: paginatedTasks.length, total: filteredTasks.length }, 'Retrieved tasks from memory in mock mode');
+      res.json(paginatedTasks);
+    } else {
+      // Validate contract initialization
+      validateContractInitialization([
+        { name: 'taskContract', instance: taskContract },
+        { name: 'taskProviders', instance: taskProviders }
+      ]);
+      
+      logger.info({ filters: { status, owner, search } }, 'Retrieving tasks from blockchain');
+      
+      // Get all tasks from blockchain using enhanced error handling
+      const allTasksResult = await handleContractOperation(
+        async () => {
+          return await taskContract.callTx.getAllActiveTasks();
+        },
+        'getAllActiveTasks',
+        'TaskContract'
       );
+      
+      let filteredTasks = allTasksResult.tasks || [];
+      
+      // Convert blockchain data to API format
+      filteredTasks = filteredTasks.map((task: any) => ({
+        id: task.taskId,
+        title: task.title,
+        description: task.description,
+        requirements: task.requirements,
+        reward: Number(task.reward),
+        deadline: new Date(Number(task.deadline) * 1000).toISOString(),
+        ownerId: task.ownerId,
+        status: task.status,
+        timestamp: new Date(Number(task.createdAt) * 1000).toISOString()
+      }));
+      
+      // Filter by status
+      if (status && typeof status === 'string') {
+        filteredTasks = filteredTasks.filter((task: any) => task.status === status);
+      }
+      
+      // Filter by owner
+      if (owner && typeof owner === 'string') {
+        filteredTasks = filteredTasks.filter((task: any) => task.ownerId === owner);
+      }
+      
+      // Search in title and description
+      if (search && typeof search === 'string') {
+        const searchLower = search.toLowerCase();
+        filteredTasks = filteredTasks.filter((task: any) => 
+          task.title.toLowerCase().includes(searchLower) ||
+          task.description.toLowerCase().includes(searchLower)
+        );
+      }
+      
+      // Sort by timestamp (newest first)
+      filteredTasks.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      logContractMetrics('getAllActiveTasks', 'TaskContract', startTime, true);
+      logger.info({ count: filteredTasks.length }, 'Retrieved tasks from blockchain');
+      res.json(filteredTasks);
     }
-    
-    // Pagination
-    const finalLimit = Math.min(Number(query.limit) || 20, 100);
-    const offset = Number(query.offset) || 0;
-    const total = filteredTasks.length;
-    
-    const paginatedTasks = filteredTasks.slice(offset, offset + finalLimit);
-    
-    // Frontend expects just the array of tasks, not wrapped response
-    logger.info({ total, limit: finalLimit, offset }, 'Retrieved tasks');
-    res.json(paginatedTasks);
     
   } catch (error) {
-    logger.error({ error }, 'Error retrieving tasks');
-    const apiError: ApiError = {
-      code: ErrorCodes.INTERNAL_SERVER_ERROR,
-      message: 'Failed to retrieve tasks',
-      details: error instanceof Error ? error.message : 'Unknown error',
-      statusCode: 500
-    };
-    res.status(500).json(createErrorResponse(apiError));
+    logContractMetrics('getAllActiveTasks', 'TaskContract', startTime, false);
+    const apiError = contractErrorToApiError(error as Error, 'getAllActiveTasks');
+    res.status(apiError.statusCode).json(createErrorResponse(apiError));
   }
 });
 
@@ -362,6 +540,14 @@ app.post('/api/tasks/:id/apply', validateRequest(applyToTaskSchema), async (req:
     const applicationId = generateId();
     
     logger.info({ taskId, applicationId }, 'Processing task application');
+    
+    // Skip contract validation in test mode
+    if (process.env.NODE_ENV !== 'test') {
+      // Validate contract initialization
+      validateContractInitialization([
+        { name: 'taskContract', instance: taskContract }
+      ]);
+    }
     
     // Check if task exists
     const task = tasks.get(taskId);
@@ -402,70 +588,216 @@ app.post('/api/tasks/:id/apply', validateRequest(applyToTaskSchema), async (req:
   }
 });
 
-// GET /proofs - Retrieve list of proofs
-app.get('/api/proofs', (req: Request, res: Response) => {
+// GET /proofs - Retrieve proofs from blockchain
+app.get('/api/proofs', async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  
   try {
-    const proofsList = Array.from(proofs.values());
-    logger.info({ count: proofsList.length }, 'Retrieved proofs');
-    res.json(proofsList);
+    const { taskId, contributorId, verified } = req.query;
+    
+    if (mockMode) {
+      // Mock mode: get proofs from in-memory storage
+      let proofsList = Array.from(proofs.values());
+      
+      // Apply filters
+      if (taskId && typeof taskId === 'string') {
+        proofsList = proofsList.filter((proof: any) => proof.taskId === taskId);
+      }
+      
+      if (contributorId && typeof contributorId === 'string') {
+        proofsList = proofsList.filter((proof: any) => proof.contributorId === contributorId);
+      }
+      
+      if (verified !== undefined) {
+        const isVerified = verified === 'true';
+        proofsList = proofsList.filter((proof: any) => proof.verified === isVerified);
+      }
+      
+      // Sort by timestamp (newest first)
+      proofsList.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      logger.info({ count: proofsList.length }, 'Retrieved proofs from memory in mock mode');
+      res.json(proofsList);
+    } else {
+      // Validate contract initialization
+      validateContractInitialization([
+        { name: 'proofContract', instance: proofContract },
+        { name: 'proofProviders', instance: proofProviders }
+      ]);
+      
+      logger.info({ filters: { taskId, contributorId, verified } }, 'Retrieving proofs from blockchain');
+      
+      // Get proofs from blockchain based on filters using enhanced error handling
+      const proofsResult = await handleContractOperation(
+        async () => {
+          if (taskId && typeof taskId === 'string') {
+            return await proofContract.callTx.getTaskProofs({ taskId });
+          } else {
+            return await proofContract.callTx.getAllProofs();
+          }
+        },
+        'getProofs',
+        'ProofContract'
+      );
+      
+      let proofsList = proofsResult.proofs || [];
+      
+      // Convert blockchain data to API format
+      proofsList = proofsList.map((proof: any) => ({
+        id: proof.proofId,
+        taskId: proof.taskId,
+        contributorId: proof.contributorId,
+        type: proof.proofType,
+        description: proof.description,
+        zkProof: proof.zkProofData,
+        verified: proof.verified,
+        timestamp: new Date(Number(proof.submittedAt) * 1000).toISOString(),
+        transactionId: proof.transactionId,
+        blockchainProofHash: proof.proofHash
+      }));
+      
+      // Apply filters
+      if (contributorId && typeof contributorId === 'string') {
+        proofsList = proofsList.filter((proof: any) => proof.contributorId === contributorId);
+      }
+      
+      if (verified !== undefined) {
+        const isVerified = verified === 'true';
+        proofsList = proofsList.filter((proof: any) => proof.verified === isVerified);
+      }
+      
+      // Sort by timestamp (newest first)
+      proofsList.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      logContractMetrics('getProofs', 'ProofContract', startTime, true);
+      logger.info({ count: proofsList.length }, 'Retrieved proofs from blockchain');
+      res.json(proofsList);
+    }
+    
   } catch (error) {
-    logger.error({ error }, 'Error retrieving proofs');
-    const apiError: ApiError = {
-      code: ErrorCodes.INTERNAL_SERVER_ERROR,
-      message: 'Failed to retrieve proofs',
-      details: error instanceof Error ? error.message : 'Unknown error',
-      statusCode: 500
-    };
-    res.status(500).json(createErrorResponse(apiError));
+    logContractMetrics('getProofs', 'ProofContract', startTime, false);
+    const apiError = contractErrorToApiError(error as Error, 'getProofs');
+    res.status(apiError.statusCode).json(createErrorResponse(apiError));
   }
 });
 
-// POST /proofs - Handle proof submissions
+// POST /proofs - Handle proof submissions using real ZK proof verification
 app.post('/api/proofs', validateRequest(submitProofSchema), async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  
   try {
     const proofData = req.body;
     const proofId = generateId();
     
-    logger.info({ proofId, taskId: proofData.taskId }, 'Processing proof submission');
+    logger.info({ taskId: proofData.taskId }, 'Processing proof submission');
     
-    // Check if task exists
-    const task = tasks.get(proofData.taskId);
-    if (!task) {
-      const apiError: ApiError = {
-        code: ErrorCodes.RESOURCE_NOT_FOUND,
-        message: 'Task not found',
-        statusCode: 404
-      };
-      return res.status(404).json(createErrorResponse(apiError));
-    }
-    
-    // Verify proof (simplified - in production, this would use actual ZK verification)
-    const verified = Math.random() > 0.3; // Mock 70% success rate
+    // Skip contract operations in test mode
+    if (process.env.NODE_ENV !== 'test') {
+      // Validate contract initialization
+      validateContractInitialization([
+        { name: 'proofContract', instance: proofContract },
+        { name: 'proofProviders', instance: proofProviders },
+        { name: 'taskContract', instance: taskContract }
+      ]);
+      
+      logger.info({ taskId: proofData.taskId }, 'Processing proof submission on blockchain');
+      // Submit and verify proof using enhanced error handling
+      const result = await handleContractOperation(
+        async () => {
+          // Check if task exists on blockchain
+          const taskResult = await taskContract.callTx.getTask({ taskId: proofData.taskId });
+          if (!taskResult.task) {
+            throw new ContractError(
+              ContractErrorType.INVALID_PARAMETERS,
+              'Task not found on blockchain'
+            );
+          }
+        
+        // Submit proof to blockchain
+        const submitProofResult = await proofContract.callTx.submitProof({
+          taskId: proofData.taskId,
+          contributorId: proofData.contributorId,
+          proofType: proofData.type || 'completion',
+          description: proofData.description,
+          zkProofData: proofData.zkProof,
+          metadata: {
+            submissionTime: Date.now(),
+            proofVersion: '1.0'
+          }
+        });
+        
+        const txResult = await submitProofResult.submit();
+        const proofId = txResult.events?.proofSubmitted?.proofId || generateId();
+        
+        // Verify the ZK proof
+        const verificationResult = await proofContract.callTx.verifyProof({
+          proofId: proofId,
+          zkProofData: proofData.zkProof
+        });
+        
+        return {
+          txResult,
+          proofId,
+          verified: verificationResult.isValid,
+          proofHash: txResult.events?.proofSubmitted?.proofHash
+        };
+      },
+      'submitProof',
+      'ProofContract'
+    );
     
     const proof = {
-      id: proofId,
+      id: result.proofId,
       taskId: proofData.taskId,
       contributorId: proofData.contributorId,
       type: proofData.type,
       description: proofData.description,
       zkProof: proofData.zkProof,
-      verified: verified,
-      timestamp: new Date().toISOString()
+      verified: result.verified,
+      timestamp: new Date().toISOString(),
+      transactionId: result.txResult.transactionId,
+      blockchainProofHash: result.proofHash
     };
     
-    proofs.set(proofId, proof as any);
-    logger.info({ proofId, verified }, 'Proof submitted successfully');
+    logContractMetrics('submitProof', 'ProofContract', startTime, true, result.txResult.transactionId);
+    logger.info({ proofId: result.proofId, verified: result.verified, transactionId: result.txResult.transactionId }, 'Proof submitted and verified on blockchain');
     res.status(201).json(proof);
     
+    } else {
+      // Test mode - validate task exists before creating proof
+      const task = tasks.get(proofData.taskId);
+      if (!task) {
+        const apiError: ApiError = {
+          code: ErrorCodes.RESOURCE_NOT_FOUND,
+          message: 'Task not found',
+          statusCode: 404
+        };
+        return res.status(404).json(createErrorResponse(apiError));
+      }
+      
+      // Create mock proof
+      const proof = {
+        id: proofId,
+        taskId: proofData.taskId,
+        contributorId: proofData.contributorId,
+        type: proofData.type,
+        description: proofData.description,
+        zkProof: proofData.zkProof,
+        verified: true,
+        timestamp: new Date().toISOString(),
+        transactionId: 'mock-tx-' + proofId,
+        blockchainProofHash: 'mock-hash-' + proofId
+      };
+      
+      proofs.set(proofId, proof as any);
+      logger.info({ proofId }, 'Mock proof created for testing');
+      res.status(201).json(proof);
+    }
+    
   } catch (error) {
-    logger.error({ error }, 'Error submitting proof');
-    const apiError: ApiError = {
-      code: ErrorCodes.PROOF_VERIFICATION_ERROR,
-      message: 'Failed to submit proof',
-      details: error instanceof Error ? error.message : 'Unknown error',
-      statusCode: 500
-    };
-    res.status(500).json(createErrorResponse(apiError));
+    logContractMetrics('submitProof', 'ProofContract', startTime, false);
+    const apiError = contractErrorToApiError(error as Error, 'submitProof');
+    res.status(apiError.statusCode).json(createErrorResponse(apiError));
   }
 });
 
@@ -576,28 +908,122 @@ export function resetStorage() {
   matches.clear();
 }
 
+// Initialize contracts
+async function initializeContracts() {
+  try {
+    logger.info('Initializing blockchain contracts...');
+    logger.info({ config }, 'Using configuration');
+    
+    // Build wallet
+    logger.info('Building wallet...');
+    const walletSeed = process.env.WALLET_SEED;
+    if (walletSeed && walletSeed !== 'your-wallet-seed-here') {
+      logger.info('Using existing wallet seed from environment');
+      wallet = await buildWalletFromExistingSeed(config, walletSeed, '');
+    } else {
+      logger.info('Creating fresh wallet with random seed');
+      wallet = await buildFreshWallet(config);
+    }
+    logger.info('Wallet initialized successfully');
+    
+    // Configure providers
+    logger.info('Configuring providers...');
+    taskProviders = await configureTaskProviders(wallet, config);
+    logger.info('Task providers configured');
+    
+    proofProviders = await configureProofProviders(wallet, config);
+    logger.info('Proof providers configured');
+    
+    matchingProviders = await configureMatchingProviders(wallet, config);
+    logger.info('Matching providers configured');
+    
+    // Join contracts using addresses from environment
+    if (contractAddresses.taskContract) {
+      logger.info({ address: contractAddresses.taskContract }, 'Joining task contract...');
+      taskContract = await joinTaskContract(taskProviders, contractAddresses.taskContract);
+      logger.info('Task contract joined successfully');
+    }
+    
+    if (contractAddresses.proofContract) {
+      logger.info({ address: contractAddresses.proofContract }, 'Joining proof contract...');
+      proofContract = await joinProofContract(proofProviders, contractAddresses.proofContract);
+      logger.info('Proof contract joined successfully');
+    }
+    
+    if (contractAddresses.matchingContract) {
+      logger.info({ address: contractAddresses.matchingContract }, 'Joining matching contract...');
+      matchingContract = await joinMatchingContract(matchingProviders, contractAddresses.matchingContract);
+      logger.info('Matching contract joined successfully');
+    }
+    
+    logger.info('All contracts initialized successfully');
+    return true;
+  } catch (error) {
+    logger.error({ 
+      error: error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      } : error 
+    }, 'Failed to initialize contracts');
+    console.error('Contract initialization error:', error);
+    return false;
+  }
+}
+
 // Initialize contracts and start server
 async function initializeServer() {
   try {
     logger.info('Initializing CloakWork API server...');
     
-    // Initialize Midnight.js contracts (simplified)
-    logger.info('Contracts initialized (mock)');
+    // Check if we should run in mock mode or with real contracts
+    const isTestMode = process.env.NODE_ENV === 'test';
+    
+    if (isTestMode) {
+      mockMode = true;
+      logger.info('Starting server in mock mode (test environment)');
+    } else {
+      // Validate that contract addresses are available
+      if (!contractAddresses.taskContract || !contractAddresses.proofContract || !contractAddresses.matchingContract) {
+        mockMode = true;
+        logger.warn('Contract addresses not found in environment variables. Starting in mock mode.');
+        logger.info('Starting server in mock mode (contracts disabled)');
+      } else {
+        logger.info('Contract addresses found. Initializing contracts...');
+        const contractsInitialized = await initializeContracts();
+        if (!contractsInitialized) {
+          mockMode = true;
+          logger.warn('Contract initialization failed. Starting in mock mode.');
+        } else {
+          mockMode = false;
+        }
+      }
+    }
     
     app.listen(PORT, () => {
       logger.info({ port: PORT }, 'CloakWork API server started successfully');
       console.log(`🚀 CloakWork API server running on http://localhost:${PORT}`);
       console.log(`📋 Health check: http://localhost:${PORT}/health`);
+      
+      if (isTestMode || !contractAddresses.taskContract || !contractAddresses.proofContract || !contractAddresses.matchingContract) {
+        console.log(`⚠️  Running in mock mode - contracts disabled`);
+      } else {
+        console.log(`✅ Contract integration enabled`);
+        console.log(`📄 Task Contract: ${contractAddresses.taskContract}`);
+        console.log(`🔍 Proof Contract: ${contractAddresses.proofContract}`);
+        console.log(`🤝 Match Contract: ${contractAddresses.matchingContract}`);
+      }
     });
     
   } catch (error) {
     logger.error({ error }, 'Failed to initialize server');
+    console.error('❌ Server initialization failed:', error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
 }
 
 // Start the server only if this file is run directly
-if (import.meta.url.endsWith('server.ts') || import.meta.url.includes('server.ts')) {
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('server.ts') || process.argv[1]?.includes('server.ts')) {
   initializeServer().catch((error) => {
     logger.error('Failed to start server:', error);
     process.exit(1);

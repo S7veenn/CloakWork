@@ -224,6 +224,38 @@ export const buildWalletAndWaitForFunds = async (
   return wallet;
 };
 
+export const buildWalletFromExistingSeed = async (
+  { indexer, indexerWS, node, proofServer }: Config,
+  seed: string,
+  filename: string,
+): Promise<Wallet & Resource> => {
+  logger.info('Building wallet from existing seed...');
+  let wallet: Wallet & Resource;
+  const indexerWsUrl = indexerWS;
+  try {
+    wallet = await WalletBuilder.buildFromSeed(indexer, indexerWsUrl, proofServer, node, seed, getZswapNetworkId(), 'info');
+    wallet.start();
+  } catch (e) {
+    logger.warn('Failed initial wallet build attempt, retrying clean');
+    wallet = await WalletBuilder.buildFromSeed(indexer, indexerWsUrl, proofServer, node, seed, getZswapNetworkId(), 'info');
+    wallet.start();
+  }
+
+  const state = await Rx.firstValueFrom(wallet.state());
+  logger.info(`Your wallet seed is: ${seed}`);
+  logger.info(`Your wallet address is: ${state.address}`);
+  const balance = state.balances[nativeToken()] || 0n;
+  logger.info(`Your wallet balance is: ${balance}`);
+
+  if (filename) {
+    try {
+      await saveState(wallet, filename);
+    } catch {}
+  }
+
+  return wallet;
+};
+
 export const buildFreshWallet = async (config: Config): Promise<Wallet & Resource> =>
   await buildWalletAndWaitForFunds(config, toHex(randomBytes(32)), '');
 
